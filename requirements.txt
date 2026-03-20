@@ -8,5 +8,7 @@ langchain
 langchain-community
 langchain-groq
 langgraph
-duckduckgo-search>=5.0.0
 plotly
+langchain==0.2.16
+langchain-community==0.2.16
+duckduckgo-search>=5.0.0
