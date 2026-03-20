@@ -1,0 +1,11 @@
+streamlit
+pandas
+gspread
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
+langchain
+langchain-groq
+langchain-community
+duckduckgo-search
+plotly
