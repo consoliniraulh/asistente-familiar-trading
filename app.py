@@ -5,8 +5,9 @@ from datetime import datetime
 from google.oauth2.service_account import Credentials
 from langchain_groq import ChatGroq
 from langchain_community.tools import DuckDuckGoSearchRun
-from langchain.agents import create_tool_calling_agent, AgentExecutor
+from langgraph.prebuilt import create_react_agent
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.messages import HumanMessage
 import plotly.express as px
 
 st.set_page_config(page_title="Mi Asistente Familiar + Trading", layout="wide")
@@ -39,13 +40,14 @@ tab1, tab2 = st.tabs(["💬 Chat Doméstico (con búsqueda web)", "📈 Análisi
 with tab1:
     st.subheader("Chat Familiar - Preguntame cualquier cosa (compras, listas, recordatorios...)")
     
-    # Carga memoria previa
+    # Carga memoria previa (últimos 30 mensajes del usuario)
     if "messages" not in st.session_state:
         st.session_state.messages = []
         records = sheet_history.get_all_records()
         user_records = [r for r in records if r.get("User") == user_id][-30:]
         for r in user_records:
-            st.session_state.messages.append({"role": "user" if r["Role"] == "user" else "assistant", "content": r["Message"]})
+            role = "user" if r["Role"] == "user" else "assistant"
+            st.session_state.messages.append({"role": role, "content": r["Message"]})
 
     # Muestra historial
     for msg in st.session_state.messages:
@@ -55,20 +57,29 @@ with tab1:
     # Herramienta de búsqueda web
     search_tool = DuckDuckGoSearchRun()
 
-    # LLM + Agente
-    llm = ChatGroq(model="llama-3.3-70b-versatile", api_key=st.secrets["GROQ_API_KEY"], temperature=0.7)
+    # LLM
+    llm = ChatGroq(
+        model="llama-3.3-70b-versatile",
+        api_key=st.secrets["GROQ_API_KEY"],
+        temperature=0.7
+    )
     
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", f"""Eres un asistente doméstico familiar en Mendoza, Argentina. 
-        Usa la herramienta de búsqueda web cuando te pregunten precios, lugares o promociones.
-        Responde siempre en español, claro y útil. Considera supermercados locales (Carrefour, Coto, Jumbo, Changomás, Día)."""),
-        ("placeholder", "{chat_history}"),
-        ("human", "{input}"),
-        ("placeholder", "{agent_scratchpad}"),
-    ])
+    # Prompt del sistema
+    system_prompt = f"""Eres un asistente doméstico familiar en Mendoza, Argentina. 
+Usa la herramienta de búsqueda web cuando te pregunten precios, lugares, promociones o información actual.
+Responde siempre en español, claro, útil y amigable.
+Considera supermercados locales: Carrefour, Coto, Jumbo, Changomás, Día, Disco, etc.
+Si es posible, incluye precios aproximados o la mejor opción encontrada."""
 
-    agent = create_tool_calling_agent(llm, [search_tool], prompt)
-    agent_executor = AgentExecutor(agent=agent, tools=[search_tool], verbose=False, handle_parsing_errors=True)
+    # Creamos el agente con LangGraph (estilo ReAct moderno)
+    agent_executor = create_react_agent(
+        model=llm,
+        tools=[search_tool],
+        prompt=ChatPromptTemplate.from_messages([
+            ("system", system_prompt),
+            ("placeholder", "{messages}"),
+        ])
+    )
 
     if prompt_user := st.chat_input("Ej: Me falta arroz, busca dónde está más barato en Mendoza"):
         st.session_state.messages.append({"role": "user", "content": prompt_user})
@@ -77,11 +88,14 @@ with tab1:
 
         with st.chat_message("assistant"):
             with st.spinner("Buscando y pensando..."):
-                response = agent_executor.invoke({"input": prompt_user, "chat_history": st.session_state.messages})
-                output = response["output"]
+                # Invocación moderna con LangGraph
+                response = agent_executor.invoke({
+                    "messages": [HumanMessage(content=prompt_user)]
+                })
+                output = response["messages"][-1].content
                 st.markdown(output)
 
-        # Guarda en Sheets
+        # Guarda en Google Sheets
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         sheet_history.append_row([now, user_id, "user", prompt_user])
         sheet_history.append_row([now, user_id, "assistant", output])
@@ -105,26 +119,26 @@ with tab2:
                 
                 # === PERSONALIZA AQUÍ TUS REGLAS EXACTAS ===
                 prompt_trading = f"""
-                Eres un trader experimentado. Analiza estos datos del activo {activo}:
+Eres un trader experimentado. Analiza estos datos del activo {activo}:
 
-                Precio: {data.get('Close', 'N/A')}
-                RSI: {data.get('RSI', 'N/A')} | MACD: {data.get('MACD', 'N/A')}
-                SMA50: {data.get('SMA50', 'N/A')} | SMA200: {data.get('SMA200', 'N/A')}
-                Volumen: {data.get('Volume', 'N/A')}
+Precio: {data.get('Close', 'N/A')}
+RSI: {data.get('RSI', 'N/A')} | MACD: {data.get('MACD', 'N/A')}
+SMA50: {data.get('SMA50', 'N/A')} | SMA200: {data.get('SMA200', 'N/A')}
+Volumen: {data.get('Volume', 'N/A')}
 
-                MIS REGLAS (ajústalas como quieras en el código):
-                - COMPRA fuerte si RSI < 30 y precio > SMA50 y MACD cruzó arriba
-                - VENTA si RSI > 70 o precio < SMA200
-                - NEUTRO en otros casos
-                - Riesgo máximo 2% del capital
-                - Considera Argentina (impuestos, comisiones)
+TUS REGLAS (modifícalas según tu estrategia):
+- COMPRA fuerte si RSI < 30 y precio > SMA50 y MACD cruzó arriba
+- VENTA si RSI > 70 o precio < SMA200
+- NEUTRO en otros casos
+- Riesgo máximo 2% del capital por operación
+- Considera contexto Argentina (impuestos, comisiones, acceso al dólar)
 
-                Responde en español con:
-                1. Señal clara (COMPRA / VENTA / NEUTRO)
-                2. Explicación paso a paso
-                3. Stop-loss y Take-profit
-                4. Tamaño de posición sugerido
-                """
+Responde en español con:
+1. Señal clara (COMPRA / VENTA / NEUTRO)
+2. Explicación paso a paso
+3. Stop-loss y Take-profit sugeridos
+4. Tamaño de posición recomendado (ej: % del capital)
+"""
 
                 respuesta = llm.invoke(prompt_trading).content
 
@@ -135,11 +149,21 @@ with tab2:
                 st.success(f"Señal generada y guardada para {activo}")
                 st.markdown(respuesta)
 
-                # Gráfico
+                # Gráfico simple
                 df_plot = pd.DataFrame(sheet_crudos.get_all_records())
                 if not df_plot.empty and "Close" in df_plot.columns:
-                    fig = px.line(df_plot[df_plot.get("Ticker") == activo], x="Date" if "Date" in df_plot.columns else df_plot.index, 
-                                  y=["Close", "SMA50", "SMA200"] if all(x in df_plot.columns for x in ["SMA50","SMA200"]) else ["Close"])
+                    columnas_grafico = ["Close"]
+                    if "SMA50" in df_plot.columns:
+                        columnas_grafico.append("SMA50")
+                    if "SMA200" in df_plot.columns:
+                        columnas_grafico.append("SMA200")
+                    
+                    fig = px.line(
+                        df_plot[df_plot.get("Ticker") == activo],
+                        x="Date" if "Date" in df_plot.columns else df_plot.index,
+                        y=columnas_grafico,
+                        title=f"{activo} - Precio y Medias"
+                    )
                     st.plotly_chart(fig, use_container_width=True)
 
 # ==================== SIDEBAR INFO ====================
