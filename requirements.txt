@@ -5,7 +5,8 @@ google-auth
 google-auth-oauthlib
 google-auth-httplib2
 langchain
-langchain-groq
 langchain-community
+langchain-groq
+langgraph
 duckduckgo-search
 plotly
